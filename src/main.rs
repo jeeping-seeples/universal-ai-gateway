@@ -5,7 +5,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use universal_ai_gateway::{
     api::{create_router, AppState},
     config::AppConfig,
-    providers::{MockProvider, OpenAICompatibleProvider, ProviderRegistry},
+    providers::{CliProvider, MockProvider, OpenAICompatibleProvider, ProviderRegistry},
 };
 
 #[tokio::main]
@@ -50,6 +50,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 hosted_config.models
             );
             registry.register(hosted_provider, hosted_config.models.clone());
+        }
+    }
+
+    // Register controlled CLI provider if enabled in configuration
+    if let Some(ref cli_config) = config.cli_provider {
+        if cli_config.enabled {
+            let cli_provider = Arc::new(CliProvider::new(cli_config)?);
+            let models: Vec<String> = cli_config.commands.keys().cloned().collect();
+            tracing::info!(
+                "Registering controlled CLI provider for models {:?}",
+                models
+            );
+            registry.register(cli_provider, models);
         }
     }
 

@@ -10,14 +10,35 @@
 - [x] Mock provider and health endpoint.
 - [x] First hosted provider (OpenAI-compatible).
 - [x] Streaming, routing, retries, and request IDs.
-- [ ] Controlled CLI adapter.
+- [x] Controlled CLI adapter.
 - [ ] ZipChat API integration.
 
 ## Current task
 
-Phase 3 completed: Server-Sent Events (SSE) streaming, deterministic routing with model fallback, bounded retries with exponential backoff on transient errors, and request ID middleware with structured logging.
+Phase 4 completed: Controlled CLI adapter with strict executable allowlist, environment clearing, bounded output size, execution timeout, non-streaming and streaming support, and unit/integration tests.
 
 ## Agent update format
+
+### 2025-05-18 (Phase 4 — Controlled CLI adapter)
+- **Task**: Phase 4 implementation (`CliProvider` with executable allowlist, environment clearing, bounded buffer truncation, execution timeouts, non-streaming & streaming responses, and tests).
+- **Files changed**:
+  - `Cargo.toml`
+  - `src/config.rs`
+  - `src/providers.rs`
+  - `src/main.rs`
+  - `tests/api_integration_tests.rs`
+  - `gateway.example.toml`
+  - `PROGRESS.md`
+  - `CHANGELOG.md`
+  - `DECISIONS.md`
+  - `BLOCKERS.md`
+- **Commands run and results**:
+  - `cargo check`: Passed without warnings.
+  - `cargo test`: 20 passed; 0 failed.
+- **Decisions or blockers**:
+  - D-015 (Strict CLI sandboxing constraints) recorded in DECISIONS.md.
+- **Suggested next task**:
+  - Phase 5: ZipChat integration and API contract freezing.
 
 ### 2025-05-18 (Phase 3 — Streaming and routing)
 - **Task**: Phase 3 implementation (SSE chat completions streaming, request ID propagation and structured logs, deterministic model routing with fallback, and bounded retries on transient errors).

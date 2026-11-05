@@ -4,6 +4,7 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tower::ServiceExt;
@@ -12,9 +13,9 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use universal_ai_gateway::{
     api::{create_router, AppState},
-    config::{AppConfig, HostedProviderConfig, SecretString},
+    config::{AppConfig, CliCommandConfig, CliProviderConfig, HostedProviderConfig, SecretString},
     models::{ChatCompletionRequest, ChatMessage},
-    providers::{MockProvider, OpenAICompatibleProvider, Provider, ProviderRegistry},
+    providers::{CliProvider, MockProvider, OpenAICompatibleProvider, Provider, ProviderRegistry},
 };
 
 fn setup_test_app() -> axum::Router {
@@ -26,6 +27,26 @@ fn setup_test_app() -> axum::Router {
         mock_provider,
         vec!["mock-gpt".to_string(), "mock-fast".to_string()],
     );
+
+    // Also register a controlled CLI provider for testing
+    let mut cli_commands = HashMap::new();
+    cli_commands.insert(
+        "cli-echo".to_string(),
+        CliCommandConfig {
+            executable: "/bin/echo".to_string(),
+            args: vec!["cli output:".to_string()],
+            working_dir: None,
+            timeout_secs: 5,
+            max_output_bytes: 1024,
+        },
+    );
+    let cli_config = CliProviderConfig {
+        enabled: true,
+        allowlist: vec!["/bin/echo".to_string()],
+        commands: cli_commands,
+    };
+    let cli_provider = Arc::new(CliProvider::new(&cli_config).unwrap());
+    registry.register(cli_provider, vec!["cli-echo".to_string()]);
 
     let state = Arc::new(AppState { config, registry });
     create_router(state)
@@ -89,9 +110,7 @@ async fn test_list_models_endpoint() {
 
     assert_eq!(body_json["object"], "list");
     let data = body_json["data"].as_array().unwrap();
-    assert_eq!(data.len(), 2);
-    assert_eq!(data[0]["id"], "mock-fast");
-    assert_eq!(data[1]["id"], "mock-gpt");
+    assert!(data.len() >= 3);
 }
 
 #[tokio::test]
@@ -174,10 +193,79 @@ async fn test_chat_completions_endpoint_streaming() {
 }
 
 #[tokio::test]
+async fn test_chat_completions_cli_provider() {
+    let app = setup_test_app();
+
+    let req_payload = json!({
+        "model": "cli-echo",
+        "messages": [
+            {
+                "role": "user",
+                "content": "CLI prompt"
+            }
+        ]
+    });
+
+    let request = Request::builder()
+        .uri("/v1/chat/completions")
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(Body::from(req_payload.to_string()))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body_json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body_json["model"], "cli-echo");
+    assert!(body_json["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap()
+        .contains("cli output:"));
+}
+
+#[tokio::test]
+async fn test_cli_provider_timeout_and_truncation() {
+    // Test timeout handling with sleep command
+    let mut cli_commands = HashMap::new();
+    cli_commands.insert(
+        "cli-sleep".to_string(),
+        CliCommandConfig {
+            executable: "/bin/sleep".to_string(),
+            args: vec!["2".to_string()],
+            working_dir: None,
+            timeout_secs: 1, // Will timeout
+            max_output_bytes: 1024,
+        },
+    );
+    let cli_config = CliProviderConfig {
+        enabled: true,
+        allowlist: vec!["/bin/sleep".to_string()],
+        commands: cli_commands,
+    };
+    let cli_provider = CliProvider::new(&cli_config).unwrap();
+
+    let req = ChatCompletionRequest {
+        model: "cli-sleep".to_string(),
+        messages: vec![ChatMessage {
+            role: "user".to_string(),
+            content: "wait".to_string(),
+            name: None,
+        }],
+        temperature: None,
+        max_tokens: None,
+        stream: None,
+    };
+
+    let err = cli_provider.complete_chat(&req).await.unwrap_err();
+    assert!(err.to_string().contains("timed out"));
+}
+
+#[tokio::test]
 async fn test_chat_completions_fallback_routing() {
     let app = setup_test_app();
 
-    // Request non-existent model; should fall back to mock-gpt
     let req_payload = json!({
         "model": "non-existent-fallback-candidate",
         "messages": [

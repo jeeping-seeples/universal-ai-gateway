@@ -7,7 +7,7 @@ authors = ["Universal AI Gateway Contributors"]
 
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["tokio", "http1", "json"] }
-tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "net", "signal", "time"] }
+tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "net", "signal", "time", "process", "io-util"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"

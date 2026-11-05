@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Implemented Phase 4: Controlled CLI Adapter.
+- Added `CliProvider` with executable allowlists, environment variable clearing (`env_clear`), timeouts, and maximum output truncation.
+- Prevented arbitrary shell execution and prohibited unallowlisted binary paths.
+- Added streaming and non-streaming responses for CLI-driven models.
 - Implemented Phase 3: Streaming, routing, bounded retries, and request IDs.
 - Added Server-Sent Events (SSE) streaming support for `POST /v1/chat/completions` with `"stream": true`.
 - Added request ID middleware (`x-request-id`) with propagation and structured log attributes without leaking payload secrets.

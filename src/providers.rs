@@ -3,11 +3,15 @@ use async_trait::async_trait;
 use futures_util::{Stream, StreamExt};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::pin::Pin;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
 
-use crate::config::HostedProviderConfig;
+use crate::config::{CliCommandConfig, CliProviderConfig, HostedProviderConfig};
 use crate::error::AppError;
 use crate::models::{
     ChatChoice, ChatChunkChoice, ChatChunkDelta, ChatCompletionChunk, ChatCompletionRequest,
@@ -277,7 +281,6 @@ impl OpenAICompatibleProvider {
             match req_builder.send().await {
                 Ok(resp) => {
                     let status = resp.status();
-                    // Retry on transient status: 429 Too Many Requests, 503 Service Unavailable, 504 Gateway Timeout
                     if (status == reqwest::StatusCode::TOO_MANY_REQUESTS
                         || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
                         || status == reqwest::StatusCode::GATEWAY_TIMEOUT)
@@ -450,6 +453,242 @@ impl Provider for OpenAICompatibleProvider {
                     }
                 }
             }
+        };
+
+        Ok(Box::pin(s))
+    }
+}
+
+pub struct CliProvider {
+    name: String,
+    allowlist: Vec<String>,
+    commands: HashMap<String, CliCommandConfig>,
+}
+
+impl CliProvider {
+    pub fn new(config: &CliProviderConfig) -> Result<Self, AppError> {
+        Ok(Self {
+            name: "cli-provider".to_string(),
+            allowlist: config.allowlist.clone(),
+            commands: config.commands.clone(),
+        })
+    }
+
+    async fn run_command(
+        &self,
+        cmd_config: &CliCommandConfig,
+        input: &str,
+    ) -> Result<String, AppError> {
+        if !self.allowlist.contains(&cmd_config.executable) {
+            return Err(AppError::BadRequest(format!(
+                "Executable '{}' is not in the CLI allowlist",
+                cmd_config.executable
+            )));
+        }
+
+        let mut cmd = Command::new(&cmd_config.executable);
+        cmd.args(&cmd_config.args);
+        cmd.env_clear(); // Isolated environment
+        cmd.stdin(Stdio::piped());
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+
+        if let Some(ref dir) = cmd_config.working_dir {
+            cmd.current_dir(PathBuf::from(dir));
+        }
+
+        let mut child = cmd.spawn().map_err(|e| AppError::ProviderError {
+            provider: self.name.clone(),
+            message: format!("Failed to spawn CLI command: {}", e),
+        })?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            let input_bytes = input.as_bytes().to_vec();
+            tokio::spawn(async move {
+                let _ = stdin.write_all(&input_bytes).await;
+            });
+        }
+
+        let timeout_duration = Duration::from_secs(cmd_config.timeout_secs);
+        let output = tokio::time::timeout(timeout_duration, child.wait_with_output())
+            .await
+            .map_err(|_| AppError::ProviderError {
+                provider: self.name.clone(),
+                message: format!("CLI command timed out after {:?}", timeout_duration),
+            })?
+            .map_err(|e| AppError::ProviderError {
+                provider: self.name.clone(),
+                message: format!("Failed to wait for CLI process: {}", e),
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(AppError::ProviderError {
+                provider: self.name.clone(),
+                message: format!("CLI process exited with non-zero status: {}", stderr.trim()),
+            });
+        }
+
+        let mut stdout_str = String::from_utf8_lossy(&output.stdout).to_string();
+        if stdout_str.len() > cmd_config.max_output_bytes {
+            stdout_str.truncate(cmd_config.max_output_bytes);
+        }
+
+        Ok(stdout_str.trim().to_string())
+    }
+}
+
+#[async_trait]
+impl Provider for CliProvider {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn list_models(&self) -> Result<Vec<ModelCard>, AppError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let models = self
+            .commands
+            .keys()
+            .map(|model_id| ModelCard {
+                id: model_id.clone(),
+                object: "model".to_string(),
+                created: now,
+                owned_by: self.name.clone(),
+            })
+            .collect();
+
+        Ok(models)
+    }
+
+    async fn complete_chat(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse, AppError> {
+        let cmd_config = self.commands.get(&request.model).ok_or_else(|| {
+            AppError::NotFound(format!(
+                "CLI model '{}' not found in CLI commands configuration",
+                request.model
+            ))
+        })?;
+
+        let last_message = request
+            .messages
+            .last()
+            .map(|m| m.content.as_str())
+            .unwrap_or("");
+
+        let output = self.run_command(cmd_config, last_message).await?;
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        Ok(ChatCompletionResponse {
+            id: format!("chatcmpl-cli-{}", now),
+            object: "chat.completion".to_string(),
+            created: now,
+            model: request.model.clone(),
+            choices: vec![ChatChoice {
+                index: 0,
+                message: ChatMessage {
+                    role: "assistant".to_string(),
+                    content: output,
+                    name: None,
+                },
+                finish_reason: Some("stop".to_string()),
+            }],
+            usage: Usage {
+                prompt_tokens: 10,
+                completion_tokens: 10,
+                total_tokens: 20,
+            },
+        })
+    }
+
+    async fn complete_chat_stream(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> Result<ChatStream, AppError> {
+        let cmd_config = self.commands.get(&request.model).ok_or_else(|| {
+            AppError::NotFound(format!(
+                "CLI model '{}' not found in CLI commands configuration",
+                request.model
+            ))
+        })?;
+
+        let last_message = request
+            .messages
+            .last()
+            .map(|m| m.content.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let output = self.run_command(cmd_config, &last_message).await?;
+
+        let model = request.model.clone();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let chunk_id = format!("chatcmpl-cli-stream-{}", now);
+
+        let words: Vec<String> = output
+            .split_whitespace()
+            .map(|s| format!("{} ", s))
+            .collect();
+
+        let s = try_stream! {
+            yield ChatCompletionChunk {
+                id: chunk_id.clone(),
+                object: "chat.completion.chunk".to_string(),
+                created: now,
+                model: model.clone(),
+                choices: vec![ChatChunkChoice {
+                    index: 0,
+                    delta: ChatChunkDelta {
+                        role: Some("assistant".to_string()),
+                        content: None,
+                    },
+                    finish_reason: None,
+                }],
+            };
+
+            for word in words {
+                yield ChatCompletionChunk {
+                    id: chunk_id.clone(),
+                    object: "chat.completion.chunk".to_string(),
+                    created: now,
+                    model: model.clone(),
+                    choices: vec![ChatChunkChoice {
+                        index: 0,
+                        delta: ChatChunkDelta {
+                            role: None,
+                            content: Some(word),
+                        },
+                        finish_reason: None,
+                    }],
+                };
+            }
+
+            yield ChatCompletionChunk {
+                id: chunk_id.clone(),
+                object: "chat.completion.chunk".to_string(),
+                created: now,
+                model: model.clone(),
+                choices: vec![ChatChunkChoice {
+                    index: 0,
+                    delta: ChatChunkDelta {
+                        role: None,
+                        content: None,
+                    },
+                    finish_reason: Some("stop".to_string()),
+                }],
+            };
         };
 
         Ok(Box::pin(s))

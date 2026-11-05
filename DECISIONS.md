@@ -41,3 +41,6 @@ Chat completion streaming uses `text/event-stream` returning standard OpenAI-com
 
 ## D-014 — Bounded retries on transient errors with backoff
 Upstream calls to providers retry only on transient status codes (429, 503, 504) or connection drops, bounded by `gateway.max_retries` with exponential backoff.
+
+## D-015 — Controlled CLI adapter constraints
+The CLI adapter prohibits arbitrary shell execution. Binaries must be allowlisted in the configuration, environment variables are cleared on spawn, outputs are bounded to `max_output_bytes`, and processes are forcibly terminated after `timeout_secs`.

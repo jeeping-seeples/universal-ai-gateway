@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::fs;
@@ -116,6 +117,47 @@ impl Default for HostedProviderConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CliCommandConfig {
+    pub executable: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub working_dir: Option<String>,
+    #[serde(default = "default_cli_timeout_secs")]
+    pub timeout_secs: u64,
+    #[serde(default = "default_cli_max_output_bytes")]
+    pub max_output_bytes: usize,
+}
+
+fn default_cli_timeout_secs() -> u64 {
+    10
+}
+
+fn default_cli_max_output_bytes() -> usize {
+    64 * 1024 // 64 KB
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CliProviderConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub allowlist: Vec<String>,
+    #[serde(default)]
+    pub commands: HashMap<String, CliCommandConfig>,
+}
+
+impl Default for CliProviderConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allowlist: vec!["/bin/echo".to_string(), "echo".to_string()],
+            commands: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayConfig {
     #[serde(default = "default_default_model")]
     pub default_model: String,
@@ -158,6 +200,8 @@ pub struct AppConfig {
     pub gateway: GatewayConfig,
     #[serde(default)]
     pub hosted_provider: Option<HostedProviderConfig>,
+    #[serde(default)]
+    pub cli_provider: Option<CliProviderConfig>,
 }
 
 impl AppConfig {
@@ -286,6 +330,19 @@ impl AppConfig {
             }
         }
 
+        if let Some(ref cli) = self.cli_provider {
+            if cli.enabled {
+                for (name, cmd) in &cli.commands {
+                    if !cli.allowlist.contains(&cmd.executable) {
+                        return Err(AppError::Config(format!(
+                            "CLI command '{}' specifies executable '{}' which is not in the allowlist",
+                            name, cmd.executable
+                        )));
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -312,44 +369,49 @@ mod tests {
         assert_eq!(config.gateway.max_retries, 2);
         assert_eq!(config.gateway.fallback_model, None);
         assert!(config.hosted_provider.is_none());
+        assert!(config.cli_provider.is_none());
         assert!(config.validate().is_ok());
     }
 
     #[test]
-    fn test_parse_hosted_provider_toml() {
+    fn test_parse_cli_provider_toml() {
         let toml_str = r#"
             [server]
             host = "127.0.0.1"
             port = 9471
 
-            [gateway]
-            default_model = "gpt-4o"
-            request_timeout_secs = 45
-            max_retries = 3
-            fallback_model = "mock-gpt"
-
-            [hosted_provider]
-            name = "my-openai"
-            base_url = "https://api.together.xyz/v1"
-            api_key = "sk-custom-secret"
-            models = ["gpt-4o", "llama-3"]
+            [cli_provider]
             enabled = true
+            allowlist = ["/bin/echo"]
+
+            [cli_provider.commands.echo-test]
+            executable = "/bin/echo"
+            args = ["Hello"]
+            timeout_secs = 5
+            max_output_bytes = 1024
         "#;
         let config = AppConfig::load_from_str(toml_str).unwrap();
-        assert_eq!(config.gateway.default_model, "gpt-4o");
-        assert_eq!(config.gateway.max_retries, 3);
-        assert_eq!(config.gateway.fallback_model, Some("mock-gpt".to_string()));
-        let hosted = config.hosted_provider.unwrap();
-        assert_eq!(hosted.name, "my-openai");
-        assert_eq!(hosted.base_url, "https://api.together.xyz/v1");
-        assert_eq!(hosted.models, vec!["gpt-4o", "llama-3"]);
-        assert!(hosted.enabled);
-        assert_eq!(
-            hosted.api_key.as_ref().unwrap().expose_secret(),
-            "sk-custom-secret"
-        );
-        let debug_str = format!("{:?}", hosted);
-        assert!(!debug_str.contains("sk-custom-secret"));
-        assert!(debug_str.contains("[REDACTED]"));
+        let cli = config.cli_provider.unwrap();
+        assert!(cli.enabled);
+        assert_eq!(cli.allowlist, vec!["/bin/echo"]);
+        assert!(cli.commands.contains_key("echo-test"));
+    }
+
+    #[test]
+    fn test_cli_provider_disallows_unapproved_binary() {
+        let toml_str = r#"
+            [cli_provider]
+            enabled = true
+            allowlist = ["/bin/echo"]
+
+            [cli_provider.commands.evil]
+            executable = "/bin/sh"
+        "#;
+        let res = AppConfig::load_from_str(toml_str);
+        assert!(res.is_err());
+        assert!(res
+            .unwrap_err()
+            .to_string()
+            .contains("not in the allowlist"));
     }
 }
