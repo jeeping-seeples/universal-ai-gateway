@@ -18,7 +18,8 @@ use universal_ai_gateway::{
 };
 
 fn setup_test_app() -> axum::Router {
-    let config = AppConfig::default();
+    let mut config = AppConfig::default();
+    config.gateway.fallback_model = Some("mock-gpt".to_string());
     let mut registry = ProviderRegistry::new();
     let mock_provider = Arc::new(MockProvider::default());
     registry.register(
@@ -42,12 +43,32 @@ async fn test_health_endpoint() {
 
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().get("x-request-id").is_some());
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let body_json: Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(body_json["status"], "ok");
     assert_eq!(body_json["version"], env!("CARGO_PKG_VERSION"));
+}
+
+#[tokio::test]
+async fn test_request_id_propagation() {
+    let app = setup_test_app();
+
+    let request = Request::builder()
+        .uri("/health")
+        .method("GET")
+        .header("x-request-id", "custom-trace-id-123")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("x-request-id").unwrap(),
+        "custom-trace-id-123"
+    );
 }
 
 #[tokio::test]
@@ -96,6 +117,7 @@ async fn test_chat_completions_endpoint_success() {
 
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().get("x-request-id").is_some());
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let body_json: Value = serde_json::from_slice(&body).unwrap();
@@ -110,15 +132,58 @@ async fn test_chat_completions_endpoint_success() {
 }
 
 #[tokio::test]
-async fn test_chat_completions_model_not_found() {
+async fn test_chat_completions_endpoint_streaming() {
     let app = setup_test_app();
 
     let req_payload = json!({
-        "model": "non-existent-model",
+        "model": "mock-gpt",
         "messages": [
             {
                 "role": "user",
-                "content": "Test"
+                "content": "Hello stream"
+            }
+        ],
+        "stream": true
+    });
+
+    let request = Request::builder()
+        .uri("/v1/chat/completions")
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(Body::from(req_payload.to_string()))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "text/event-stream"
+    );
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body_str = String::from_utf8_lossy(&body);
+
+    assert!(body_str.contains("data:"));
+    assert!(body_str.contains("[DONE]"));
+    assert!(body_str.contains("chat.completion.chunk"));
+}
+
+#[tokio::test]
+async fn test_chat_completions_fallback_routing() {
+    let app = setup_test_app();
+
+    // Request non-existent model; should fall back to mock-gpt
+    let req_payload = json!({
+        "model": "non-existent-fallback-candidate",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Test fallback"
             }
         ]
     });
@@ -131,16 +196,11 @@ async fn test_chat_completions_model_not_found() {
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::OK);
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let body_json: Value = serde_json::from_slice(&body).unwrap();
-
-    assert_eq!(body_json["error"]["type"], "not_found_error");
-    assert!(body_json["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("not found"));
+    assert_eq!(body_json["model"], "mock-gpt");
 }
 
 #[tokio::test]
@@ -214,7 +274,7 @@ async fn test_openai_compatible_provider_success() {
     };
 
     let provider =
-        OpenAICompatibleProvider::new(&config, Duration::from_secs(5)).expect("provider");
+        OpenAICompatibleProvider::new(&config, Duration::from_secs(5), 2).expect("provider");
 
     let req = ChatCompletionRequest {
         model: "gpt-4o".to_string(),
@@ -237,31 +297,62 @@ async fn test_openai_compatible_provider_success() {
 }
 
 #[tokio::test]
-async fn test_openai_compatible_provider_upstream_error() {
+async fn test_openai_compatible_provider_bounded_retries_recovers() {
     let mock_server = MockServer::start().await;
+
+    // First attempt returns 429
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(429).set_body_string("Rate limited"))
+        .up_to_n_times(1)
+        .mount(&mock_server)
+        .await;
+
+    // Second attempt recovers with 200
+    let success_json = json!({
+        "id": "chatcmpl-recovered",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4o",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Recovered after retry"
+                },
+                "finish_reason": "stop"
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 5,
+            "completion_tokens": 5,
+            "total_tokens": 10
+        }
+    });
 
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .respond_with(ResponseTemplate::new(429).set_body_string("Rate limit reached on provider"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(success_json))
         .mount(&mock_server)
         .await;
 
     let config = HostedProviderConfig {
-        name: "rate-limited-provider".to_string(),
+        name: "retry-provider".to_string(),
         base_url: mock_server.uri(),
-        api_key: Some(SecretString::new("test-api-key")),
+        api_key: None,
         models: vec!["gpt-4o".to_string()],
         enabled: true,
     };
 
     let provider =
-        OpenAICompatibleProvider::new(&config, Duration::from_secs(5)).expect("provider");
+        OpenAICompatibleProvider::new(&config, Duration::from_secs(5), 2).expect("provider");
 
     let req = ChatCompletionRequest {
         model: "gpt-4o".to_string(),
         messages: vec![ChatMessage {
             role: "user".to_string(),
-            content: "Hi!".to_string(),
+            content: "Retry me".to_string(),
             name: None,
         }],
         temperature: None,
@@ -269,10 +360,9 @@ async fn test_openai_compatible_provider_upstream_error() {
         stream: None,
     };
 
-    let err = provider.complete_chat(&req).await.unwrap_err();
-    let err_str = err.to_string();
-    assert!(err_str.contains("rate-limited-provider"));
-    assert!(err_str.contains("429"));
+    let res = provider.complete_chat(&req).await.unwrap();
+    assert_eq!(res.id, "chatcmpl-recovered");
+    assert_eq!(res.choices[0].message.content, "Recovered after retry");
 }
 
 #[tokio::test]
@@ -298,7 +388,7 @@ async fn test_openai_compatible_provider_timeout() {
     };
 
     let provider =
-        OpenAICompatibleProvider::new(&config, Duration::from_millis(50)).expect("provider");
+        OpenAICompatibleProvider::new(&config, Duration::from_millis(50), 0).expect("provider");
 
     let req = ChatCompletionRequest {
         model: "gpt-4o".to_string(),

@@ -35,3 +35,9 @@ Reqwest with Rustls avoids external C library/OpenSSL dependencies on the Raspbe
 
 ## D-012 — Secret protection via SecretString
 API keys and tokens are wrapped in `SecretString` to prevent accidental logging or display in diagnostics and errors.
+
+## D-013 — Streaming via standard Server-Sent Events (SSE)
+Chat completion streaming uses `text/event-stream` returning standard OpenAI-compatible chunks terminated with `[DONE]`.
+
+## D-014 — Bounded retries on transient errors with backoff
+Upstream calls to providers retry only on transient status codes (429, 503, 504) or connection drops, bounded by `gateway.max_retries` with exponential backoff.

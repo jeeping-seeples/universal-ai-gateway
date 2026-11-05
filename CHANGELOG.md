@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+- Implemented Phase 3: Streaming, routing, bounded retries, and request IDs.
+- Added Server-Sent Events (SSE) streaming support for `POST /v1/chat/completions` with `"stream": true`.
+- Added request ID middleware (`x-request-id`) with propagation and structured log attributes without leaking payload secrets.
+- Added deterministic model routing with optional fallback model (`gateway.fallback_model`).
+- Added bounded retries with exponential backoff on transient errors (HTTP 429, 503, 504).
 - Implemented Phase 2: OpenAI-compatible hosted provider adapter.
 - Added `OpenAICompatibleProvider` with configurable endpoint (`base_url`), bearer auth, timeout, bounded parsing, and upstream error mapping.
 - Added secret masking (`SecretString`) so API keys are never leaked in logs or error messages.

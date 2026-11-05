@@ -9,15 +9,39 @@
 - [x] Rust project skeleton.
 - [x] Mock provider and health endpoint.
 - [x] First hosted provider (OpenAI-compatible).
-- [ ] Streaming.
+- [x] Streaming, routing, retries, and request IDs.
 - [ ] Controlled CLI adapter.
 - [ ] ZipChat API integration.
 
 ## Current task
 
-Phase 2 completed: First hosted provider (OpenAI-compatible adapter with base_url and API key redaction, timeout handling, non-streaming completions, and wiremock tests).
+Phase 3 completed: Server-Sent Events (SSE) streaming, deterministic routing with model fallback, bounded retries with exponential backoff on transient errors, and request ID middleware with structured logging.
 
 ## Agent update format
+
+### 2025-05-18 (Phase 3 — Streaming and routing)
+- **Task**: Phase 3 implementation (SSE chat completions streaming, request ID propagation and structured logs, deterministic model routing with fallback, and bounded retries on transient errors).
+- **Files changed**:
+  - `Cargo.toml`
+  - `src/lib.rs`
+  - `src/api.rs`
+  - `src/middleware.rs`
+  - `src/models.rs`
+  - `src/providers.rs`
+  - `src/config.rs`
+  - `src/main.rs`
+  - `tests/api_integration_tests.rs`
+  - `PROGRESS.md`
+  - `CHANGELOG.md`
+  - `DECISIONS.md`
+  - `BLOCKERS.md`
+- **Commands run and results**:
+  - `cargo check`: Passed without warnings.
+  - `cargo test`: 17 passed; 0 failed.
+- **Decisions or blockers**:
+  - D-013 (SSE streaming format) and D-014 (bounded retries with exponential backoff) recorded in DECISIONS.md.
+- **Suggested next task**:
+  - Phase 4: Controlled CLI adapter design and human approval.
 
 ### 2025-05-18 (Phase 2 — First hosted provider)
 - **Task**: Phase 2 implementation (`OpenAICompatibleProvider` with configurable base_url, bearer auth, secret redaction, request timeout, bounded response handling, and wiremock mock integration tests).

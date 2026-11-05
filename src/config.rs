@@ -121,6 +121,10 @@ pub struct GatewayConfig {
     pub default_model: String,
     #[serde(default = "default_request_timeout_secs")]
     pub request_timeout_secs: u64,
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+    #[serde(default)]
+    pub fallback_model: Option<String>,
 }
 
 fn default_default_model() -> String {
@@ -131,11 +135,17 @@ fn default_request_timeout_secs() -> u64 {
     30
 }
 
+fn default_max_retries() -> u32 {
+    2
+}
+
 impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
             default_model: default_default_model(),
             request_timeout_secs: default_request_timeout_secs(),
+            max_retries: default_max_retries(),
+            fallback_model: None,
         }
     }
 }
@@ -200,6 +210,18 @@ impl AppConfig {
         if let Ok(timeout_str) = env::var("GATEWAY_REQUEST_TIMEOUT_SECS") {
             if let Ok(timeout) = timeout_str.trim().parse::<u64>() {
                 self.gateway.request_timeout_secs = timeout;
+            }
+        }
+
+        if let Ok(retries_str) = env::var("GATEWAY_MAX_RETRIES") {
+            if let Ok(retries) = retries_str.trim().parse::<u32>() {
+                self.gateway.max_retries = retries;
+            }
+        }
+
+        if let Ok(fallback) = env::var("GATEWAY_FALLBACK_MODEL") {
+            if !fallback.trim().is_empty() {
+                self.gateway.fallback_model = Some(fallback.trim().to_string());
             }
         }
 
@@ -287,6 +309,8 @@ mod tests {
         assert_eq!(config.server.port, 9471);
         assert_eq!(config.gateway.default_model, "mock-gpt");
         assert_eq!(config.gateway.request_timeout_secs, 30);
+        assert_eq!(config.gateway.max_retries, 2);
+        assert_eq!(config.gateway.fallback_model, None);
         assert!(config.hosted_provider.is_none());
         assert!(config.validate().is_ok());
     }
@@ -301,6 +325,8 @@ mod tests {
             [gateway]
             default_model = "gpt-4o"
             request_timeout_secs = 45
+            max_retries = 3
+            fallback_model = "mock-gpt"
 
             [hosted_provider]
             name = "my-openai"
@@ -311,6 +337,8 @@ mod tests {
         "#;
         let config = AppConfig::load_from_str(toml_str).unwrap();
         assert_eq!(config.gateway.default_model, "gpt-4o");
+        assert_eq!(config.gateway.max_retries, 3);
+        assert_eq!(config.gateway.fallback_model, Some("mock-gpt".to_string()));
         let hosted = config.hosted_provider.unwrap();
         assert_eq!(hosted.name, "my-openai");
         assert_eq!(hosted.base_url, "https://api.together.xyz/v1");
@@ -320,7 +348,6 @@ mod tests {
             hosted.api_key.as_ref().unwrap().expose_secret(),
             "sk-custom-secret"
         );
-        // Verify Debug does not leak secret
         let debug_str = format!("{:?}", hosted);
         assert!(!debug_str.contains("sk-custom-secret"));
         assert!(debug_str.contains("[REDACTED]"));

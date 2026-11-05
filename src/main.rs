@@ -38,7 +38,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(ref hosted_config) = config.hosted_provider {
         if hosted_config.enabled || hosted_config.api_key.is_some() {
             let timeout = Duration::from_secs(config.gateway.request_timeout_secs);
-            let hosted_provider = Arc::new(OpenAICompatibleProvider::new(hosted_config, timeout)?);
+            let retries = config.gateway.max_retries;
+            let hosted_provider = Arc::new(OpenAICompatibleProvider::new(
+                hosted_config,
+                timeout,
+                retries,
+            )?);
             tracing::info!(
                 "Registering hosted OpenAI-compatible provider '{}' for models {:?}",
                 hosted_config.name,
