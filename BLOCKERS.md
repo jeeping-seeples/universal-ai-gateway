@@ -1,13 +1,11 @@
 # Blockers and open questions
 
-No confirmed blockers yet. Resolve these during the read-only audit; do not invent answers.
+Resolved for Phase 1:
+- First hosted provider: OpenAI-compatible interface selected.
+- Target device / profile: Raspberry Pi 4B.
+- Network binding: `127.0.0.1:9471` (localhost only default).
+- Configuration format: TOML with env overrides.
 
-- Which hosted provider should be implemented first?
-- Which OpenAI-compatible API subset is sufficient for the first release?
-- Should the first deployment bind to localhost only, or support LAN access with authentication?
-- What configuration format is simplest and safe for the target device?
-- Which streaming protocol best fits the client and implementation complexity?
-- What is the intended CLI integration target, and what permissions should it have?
-- Which Raspberry Pi model / memory constraints should be used for performance assumptions?
-
-Record each blocker with impact, options, recommendation, and the human decision needed.
+Open questions for subsequent phases:
+- Which streaming protocol best fits the client (Server-Sent Events / SSE recommended for Phase 3)?
+- What is the intended CLI integration target, and what permissions should it have (Phase 4)?
