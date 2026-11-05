@@ -1,0 +1,8 @@
+# Example gateway configuration
+[server]
+host = "127.0.0.1"
+port = 9471
+
+[gateway]
+default_model = "mock-gpt"
+request_timeout_secs = 30

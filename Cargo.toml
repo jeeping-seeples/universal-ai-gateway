@@ -1,0 +1,29 @@
+[package]
+name = "universal-ai-gateway"
+version = "0.1.0"
+edition = "2021"
+description = "Lightweight Universal AI Gateway"
+authors = ["Universal AI Gateway Contributors"]
+
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1", "json"] }
+tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "net", "signal"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+async-trait = "0.1"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
