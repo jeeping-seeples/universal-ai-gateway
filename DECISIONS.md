@@ -29,3 +29,18 @@ To prevent accidental exposure without authentication and avoid collision with c
 
 ## D-010 — Single-crate architecture for initial phases
 A single crate structure with modular library modules (`api`, `config`, `error`, `models`, `providers`) keeps build times and overhead minimal for development and Raspberry Pi compilation.
+
+## D-011 — HTTP Client: Reqwest with Rustls
+Reqwest with Rustls avoids external C library/OpenSSL dependencies on the Raspberry Pi while providing safe async HTTP/1.1 and HTTP/2 communication with hosted providers.
+
+## D-012 — Secret protection via SecretString
+API keys and tokens are wrapped in `SecretString` to prevent accidental logging or display in diagnostics and errors.
+
+## D-013 — Streaming via standard Server-Sent Events (SSE)
+Chat completion streaming uses `text/event-stream` returning standard OpenAI-compatible chunks terminated with `[DONE]`.
+
+## D-014 — Bounded retries on transient errors with backoff
+Upstream calls to providers retry only on transient status codes (429, 503, 504) or connection drops, bounded by `gateway.max_retries` with exponential backoff.
+
+## D-015 — Controlled CLI adapter constraints
+The CLI adapter prohibits arbitrary shell execution. Binaries must be allowlisted in the configuration, environment variables are cleared on spawn, outputs are bounded to `max_output_bytes`, and processes are forcibly terminated after `timeout_secs`.

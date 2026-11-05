@@ -45,6 +45,30 @@ pub struct ChatCompletionResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatChunkDelta {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatChunkChoice {
+    pub index: u32,
+    pub delta: ChatChunkDelta,
+    pub finish_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatCompletionChunk {
+    pub id: String,
+    pub object: String,
+    pub created: u64,
+    pub model: String,
+    pub choices: Vec<ChatChunkChoice>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelCard {
     pub id: String,
     pub object: String,

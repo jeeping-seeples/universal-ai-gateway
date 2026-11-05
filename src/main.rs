@@ -1,10 +1,11 @@
 use std::sync::Arc;
+use std::time::Duration;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use universal_ai_gateway::{
     api::{create_router, AppState},
     config::AppConfig,
-    providers::{MockProvider, ProviderRegistry},
+    providers::{CliProvider, MockProvider, OpenAICompatibleProvider, ProviderRegistry},
 };
 
 #[tokio::main]
@@ -25,11 +26,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = config.socket_addr()?;
 
     let mut registry = ProviderRegistry::new();
+
+    // Register mock provider for default testing/mock models
     let mock_provider = Arc::new(MockProvider::default());
     registry.register(
         mock_provider,
         vec!["mock-gpt".to_string(), "mock-fast".to_string()],
     );
+
+    // Register hosted provider if enabled or configured
+    if let Some(ref hosted_config) = config.hosted_provider {
+        if hosted_config.enabled || hosted_config.api_key.is_some() {
+            let timeout = Duration::from_secs(config.gateway.request_timeout_secs);
+            let retries = config.gateway.max_retries;
+            let hosted_provider = Arc::new(OpenAICompatibleProvider::new(
+                hosted_config,
+                timeout,
+                retries,
+            )?);
+            tracing::info!(
+                "Registering hosted OpenAI-compatible provider '{}' for models {:?}",
+                hosted_config.name,
+                hosted_config.models
+            );
+            registry.register(hosted_provider, hosted_config.models.clone());
+        }
+    }
+
+    // Register controlled CLI provider if enabled in configuration
+    if let Some(ref cli_config) = config.cli_provider {
+        if cli_config.enabled {
+            let cli_provider = Arc::new(CliProvider::new(cli_config)?);
+            let models: Vec<String> = cli_config.commands.keys().cloned().collect();
+            tracing::info!(
+                "Registering controlled CLI provider for models {:?}",
+                models
+            );
+            registry.register(cli_provider, models);
+        }
+    }
 
     let state = Arc::new(AppState { config, registry });
     let router = create_router(state);
