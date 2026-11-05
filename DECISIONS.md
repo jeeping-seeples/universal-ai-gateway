@@ -29,3 +29,9 @@ To prevent accidental exposure without authentication and avoid collision with c
 
 ## D-010 — Single-crate architecture for initial phases
 A single crate structure with modular library modules (`api`, `config`, `error`, `models`, `providers`) keeps build times and overhead minimal for development and Raspberry Pi compilation.
+
+## D-011 — HTTP Client: Reqwest with Rustls
+Reqwest with Rustls avoids external C library/OpenSSL dependencies on the Raspberry Pi while providing safe async HTTP/1.1 and HTTP/2 communication with hosted providers.
+
+## D-012 — Secret protection via SecretString
+API keys and tokens are wrapped in `SecretString` to prevent accidental logging or display in diagnostics and errors.

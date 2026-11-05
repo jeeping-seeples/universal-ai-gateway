@@ -1,10 +1,11 @@
 use std::sync::Arc;
+use std::time::Duration;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use universal_ai_gateway::{
     api::{create_router, AppState},
     config::AppConfig,
-    providers::{MockProvider, ProviderRegistry},
+    providers::{MockProvider, OpenAICompatibleProvider, ProviderRegistry},
 };
 
 #[tokio::main]
@@ -25,11 +26,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = config.socket_addr()?;
 
     let mut registry = ProviderRegistry::new();
+
+    // Register mock provider for default testing/mock models
     let mock_provider = Arc::new(MockProvider::default());
     registry.register(
         mock_provider,
         vec!["mock-gpt".to_string(), "mock-fast".to_string()],
     );
+
+    // Register hosted provider if enabled or configured
+    if let Some(ref hosted_config) = config.hosted_provider {
+        if hosted_config.enabled || hosted_config.api_key.is_some() {
+            let timeout = Duration::from_secs(config.gateway.request_timeout_secs);
+            let hosted_provider = Arc::new(OpenAICompatibleProvider::new(hosted_config, timeout)?);
+            tracing::info!(
+                "Registering hosted OpenAI-compatible provider '{}' for models {:?}",
+                hosted_config.name,
+                hosted_config.models
+            );
+            registry.register(hosted_provider, hosted_config.models.clone());
+        }
+    }
 
     let state = Arc::new(AppState { config, registry });
     let router = create_router(state);

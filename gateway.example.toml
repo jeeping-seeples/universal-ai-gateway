@@ -6,3 +6,10 @@ port = 9471
 [gateway]
 default_model = "mock-gpt"
 request_timeout_secs = 30
+
+[hosted_provider]
+name = "openai-compatible"
+base_url = "https://api.openai.com/v1"
+api_key = "sk-..." # Or set via OPENAI_API_KEY environment variable
+models = ["gpt-4o-mini", "gpt-4o"]
+enabled = true
